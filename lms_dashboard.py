@@ -8,7 +8,7 @@ import io
 import re
 import json
 from typing import List, Dict, Any
-
+import certifi
 import pandas as pd
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -195,9 +195,9 @@ def load_data_from_mongo() -> pd.DataFrame:
     try:
         client = pymongo.MongoClient(
             CONNECTION_STRING,
-            tls=True,                        # force TLS/SSL
-            tlsAllowInvalidCertificates=False,
-            serverSelectionTimeoutMS=20000,  # 20s
+            tls=True,
+            tlsCAFile=certifi.where(),
+            serverSelectionTimeoutMS=20000,
             connectTimeoutMS=20000,
             socketTimeoutMS=20000,
         )
