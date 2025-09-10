@@ -26,6 +26,12 @@ import gspread
 import pymongo
 from pymongo.errors import ConnectionFailure, OperationFailure
 
+import certifi
+client = pymongo.MongoClient(
+    CONNECTION_STRING,
+    tls=True,
+    tlsCAFile=certifi.where()
+)
 
 # -----------------------------
 # Helpers
