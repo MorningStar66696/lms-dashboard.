@@ -1,7 +1,7 @@
 # lms_dashboard_plus.py
 # Streamlit: Fast leads viewer (from scratch) + enhanced features — share URL functionality removed
 # Requirements:
-# pip install streamlit pandas openpyxl xlsxwriter streamlit-autorefresh plotly gspread google-auth-oauthlib pymongo python-dateutil
+# pip install streamlit pandas openpyxl xlsxwriter streamlit-autorefresh plotly gspread google-auth-oauthlib pymongo python-dateutil certifi
 
 import os
 import io
@@ -26,12 +26,10 @@ import gspread
 import pymongo
 from pymongo.errors import ConnectionFailure, OperationFailure
 
-
 # -----------------------------
 # Helpers
 # -----------------------------
 def _ensure_date(val):
-    """Convert Streamlit state (date, datetime, or str) into datetime.date."""
     if isinstance(val, date):
         return val
     if isinstance(val, datetime):
@@ -45,10 +43,6 @@ def _ensure_date(val):
 
 
 def _get_secret(path: str, default: str = "") -> str:
-    """
-    Read configuration from environment variables only.
-    path: dot.notation like "mongo.uri" -> checks env var MONGO_URI
-    """
     env_key = path.upper().replace('.', '_')
     val = os.getenv(env_key)
     return val if val else default
@@ -62,7 +56,6 @@ def safe_head_unique_vals(series: pd.Series, max_unique=1000):
 def to_excel_bytes(df: pd.DataFrame) -> bytes:
     out = io.BytesIO()
     df2 = df.copy()
-    # Convert datetime-like series for Excel compatibility
     for c in df2.columns:
         try:
             series = pd.to_datetime(df2[c], errors="coerce", utc=False)
@@ -79,16 +72,13 @@ def to_excel_bytes_multi(df: pd.DataFrame) -> bytes:
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as w:
         df.to_excel(w, index=False, sheet_name="Leads")
-        # summaries
         for col, sheet in [("State", "ByState"), ("Course", "ByCourse"), ("Source", "BySource"), ("City", "ByCity")]:
             if col in df.columns and not df[col].dropna().empty:
-                vc = df[col].astype(str).replace(
-                    "", pd.NA).dropna().value_counts().reset_index()
+                vc = df[col].astype(str).replace("", pd.NA).dropna().value_counts().reset_index()
                 vc.columns = [col, "Leads"]
                 vc.to_excel(w, index=False, sheet_name=sheet)
         if "SortKey" in df.columns:
-            trend = df.groupby(
-                df["SortKey"].dt.date).size().reset_index(name="Leads")
+            trend = df.groupby(df["SortKey"].dt.date).size().reset_index(name="Leads")
             trend.to_excel(w, index=False, sheet_name="Trend")
     return out.getvalue()
 
@@ -120,7 +110,6 @@ EXPECTED_COLS: List[str] = [
     "Number_Course 2", "Spreadsheet Source"
 ]
 
-# Mongo config (env var fallback)
 DEFAULT_MONGO_URI = (
     "mongodb+srv://vineetsaraswat_db_user:2epv36YctAQiZwts@cluster0.zccrbma.mongodb.net/"
     "?retryWrites=true&w=majority&appName=Cluster0"
@@ -129,18 +118,12 @@ CONNECTION_STRING = _get_secret("mongo.uri", DEFAULT_MONGO_URI)
 DATABASE_NAME = _get_secret("mongo.database", "Main")
 COLLECTION_NAME = _get_secret("mongo.collection", "Main Data")
 
-
-# -----------------------------
-# Auto-refresh
-# -----------------------------
 st_autorefresh(interval=AUTO_REFRESH_MS, key="global_autorefresh")
-
 
 # -----------------------------
 # Google Sheets → Excel downloader
 # -----------------------------
 def download_sheet_to_excel(sheet_id: str, sheet_name: str, out_path: str) -> bool:
-    """Download Google Sheet and save as Excel using OAuth2. Returns True on success."""
     scopes = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
     creds = None
 
@@ -154,8 +137,7 @@ def download_sheet_to_excel(sheet_id: str, sheet_name: str, out_path: str) -> bo
             if not os.path.exists("credentials.json"):
                 st.error("Missing credentials.json for Google OAuth.")
                 return False
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", scopes)
+            flow = InstalledAppFlow.from_client_secrets_file("credentials.json", scopes)
             creds = flow.run_local_server(port=0)
         with open("token.json", "w") as token:
             token.write(creds.to_json())
@@ -183,14 +165,10 @@ def download_sheet_to_excel(sheet_id: str, sheet_name: str, out_path: str) -> bo
 
 
 # -----------------------------
-# Load data from MongoDB (cached)
-# -----------------------------
-# -----------------------------
-# Load data from MongoDB (cached)
+# Load data from MongoDB
 # -----------------------------
 @st.cache_data(show_spinner="Loading leads from MongoDB…", ttl=10 * 60)
 def load_data_from_mongo() -> pd.DataFrame:
-    """Fetch leads directly from MongoDB and return as pandas DataFrame."""
     client = None
     try:
         client = pymongo.MongoClient(
@@ -201,7 +179,7 @@ def load_data_from_mongo() -> pd.DataFrame:
             connectTimeoutMS=20000,
             socketTimeoutMS=20000,
         )
-        client.admin.command("ping")  # confirm connection
+        client.admin.command("ping")
         db = client[DATABASE_NAME]
         collection = db[COLLECTION_NAME]
         data = list(collection.find({}, {"_id": 0}))
@@ -210,14 +188,11 @@ def load_data_from_mongo() -> pd.DataFrame:
             return pd.DataFrame(columns=EXPECTED_COLS)
 
         df = pd.DataFrame(data)
-
-        # Normalize columns
         df.columns = [str(c).strip() for c in df.columns]
         for c in EXPECTED_COLS:
             if c not in df.columns:
                 df[c] = ""
 
-        # Parse dates
         df["Date_parsed"] = pd.to_datetime(df["Date"].astype(str), dayfirst=True, errors="coerce")
         try:
             t = pd.to_datetime(df["Time"].astype(str), errors="coerce").dt.time
@@ -232,36 +207,23 @@ def load_data_from_mongo() -> pd.DataFrame:
         if df["created_dt"].isna().all():
             df["created_dt"] = pd.to_datetime(created_raw, errors="coerce")
 
-        df["SortKey"] = pd.to_datetime(
-            df["LeadDateTime"].fillna(df["created_dt"]), errors="coerce"
-        )
+        df["SortKey"] = pd.to_datetime(df["LeadDateTime"].fillna(df["created_dt"]), errors="coerce")
 
-        # Phone normalization
         if "Phone Number" in df.columns:
-            df["Phone Number"] = (
-                df["Phone Number"].astype(str).str.replace(r"[^\d]", "", regex=True).str.strip()
-            )
+            df["Phone Number"] = df["Phone Number"].astype(str).str.replace(r"[^\d]", "", regex=True).str.strip()
 
-        df["Date_formatted"] = pd.to_datetime(
-            df["Date_parsed"], errors="coerce"
-        ).dt.strftime("%d/%m/%Y")
+        df["Date_formatted"] = pd.to_datetime(df["Date_parsed"], errors="coerce").dt.strftime("%d/%m/%Y")
 
-        # Duplicate detection
         df["dup_phone"] = df["Phone Number"].where(df["Phone Number"].ne(""))
         df["dup_email"] = df["Email"].where(df["Email"].astype(str).str.strip().ne(""))
-        df["dup_num_course2"] = df["Number_Course 2"].where(
-            df["Number_Course 2"].astype(str).str.strip().ne("")
-        )
+        df["dup_num_course2"] = df["Number_Course 2"].where(df["Number_Course 2"].astype(str).str.strip().ne(""))
 
         df["is_dup_phone"] = df.duplicated(subset=["dup_phone"], keep=False) & df["dup_phone"].notna()
         df["is_dup_email"] = df.duplicated(subset=["dup_email"], keep=False) & df["dup_email"].notna()
-        df["is_dup_num_course2"] = df.duplicated(
-            subset=["dup_num_course2"], keep=False
-        ) & df["dup_num_course2"].notna()
+        df["is_dup_num_course2"] = df.duplicated(subset=["dup_num_course2"], keep=False) & df["dup_num_course2"].notna()
 
         df.drop(columns=["dup_phone", "dup_email", "dup_num_course2"], inplace=True)
 
-        # Quick action links
         if "Phone Number" in df.columns:
             def _wa(num: str) -> str:
                 n = str(num)
@@ -271,11 +233,8 @@ def load_data_from_mongo() -> pd.DataFrame:
                     n = "91" + n
                 return f"https://wa.me/{n}"
             df["WhatsApp"] = df["Phone Number"].apply(_wa)
-            df["Tel"] = df["Phone Number"].apply(
-                lambda x: f"tel:{x}" if str(x).strip() else ""
-            )
+            df["Tel"] = df["Phone Number"].apply(lambda x: f"tel:{x}" if str(x).strip() else "")
 
-        # Reverse (newest first)
         df = df.iloc[::-1].reset_index(drop=True)
         return df
 
@@ -288,6 +247,7 @@ def load_data_from_mongo() -> pd.DataFrame:
     finally:
         if client:
             client.close()
+
 
 
 
