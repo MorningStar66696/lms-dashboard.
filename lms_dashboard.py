@@ -26,12 +26,6 @@ import gspread
 import pymongo
 from pymongo.errors import ConnectionFailure, OperationFailure
 
-import certifi
-client = pymongo.MongoClient(
-    CONNECTION_STRING,
-    tls=True,
-    tlsCAFile=certifi.where()
-)
 
 # -----------------------------
 # Helpers
@@ -191,18 +185,30 @@ def download_sheet_to_excel(sheet_id: str, sheet_name: str, out_path: str) -> bo
 # -----------------------------
 # Load data from MongoDB (cached)
 # -----------------------------
+# -----------------------------
+# Load data from MongoDB (cached)
+# -----------------------------
 @st.cache_data(show_spinner="Loading leads from MongoDB…", ttl=10 * 60)
 def load_data_from_mongo() -> pd.DataFrame:
     """Fetch leads directly from MongoDB and return as pandas DataFrame."""
     client = None
     try:
-        client = pymongo.MongoClient(CONNECTION_STRING, tls=True, tlsCAFile=certifi.where())
-        client.admin.command("ping")
+        client = pymongo.MongoClient(
+            CONNECTION_STRING,
+            tls=True,                        # force TLS/SSL
+            tlsAllowInvalidCertificates=False,
+            serverSelectionTimeoutMS=20000,  # 20s
+            connectTimeoutMS=20000,
+            socketTimeoutMS=20000,
+        )
+        client.admin.command("ping")  # confirm connection
         db = client[DATABASE_NAME]
         collection = db[COLLECTION_NAME]
         data = list(collection.find({}, {"_id": 0}))
+
         if not data:
             return pd.DataFrame(columns=EXPECTED_COLS)
+
         df = pd.DataFrame(data)
 
         # Normalize columns
@@ -211,52 +217,49 @@ def load_data_from_mongo() -> pd.DataFrame:
             if c not in df.columns:
                 df[c] = ""
 
-        # Parse dates and times
-        df["Date_parsed"] = pd.to_datetime(
-            df["Date"].astype(str), dayfirst=True, errors="coerce")
+        # Parse dates
+        df["Date_parsed"] = pd.to_datetime(df["Date"].astype(str), dayfirst=True, errors="coerce")
         try:
             t = pd.to_datetime(df["Time"].astype(str), errors="coerce").dt.time
-            lead_dt_str = df["Date_parsed"].dt.date.astype(
-                str) + " " + pd.Series(t).astype(str)
+            lead_dt_str = df["Date_parsed"].dt.date.astype(str) + " " + pd.Series(t).astype(str)
             df["LeadDateTime"] = pd.to_datetime(lead_dt_str, errors="coerce")
             df.loc[df["LeadDateTime"].isna(), "LeadDateTime"] = df["Date_parsed"]
         except Exception:
             df["LeadDateTime"] = df["Date_parsed"]
 
-        created_raw = df["created_time"].astype(
-            str).str.replace('"', '', regex=False)
-        df["created_dt"] = pd.to_datetime(
-            created_raw, errors="coerce", dayfirst=True)
+        created_raw = df["created_time"].astype(str).str.replace('"', '', regex=False)
+        df["created_dt"] = pd.to_datetime(created_raw, errors="coerce", dayfirst=True)
         if df["created_dt"].isna().all():
             df["created_dt"] = pd.to_datetime(created_raw, errors="coerce")
 
         df["SortKey"] = pd.to_datetime(
-            df["LeadDateTime"].fillna(df["created_dt"]), errors="coerce")
+            df["LeadDateTime"].fillna(df["created_dt"]), errors="coerce"
+        )
 
         # Phone normalization
         if "Phone Number" in df.columns:
-            df["Phone Number"] = df["Phone Number"].astype(
-                str).str.replace(r"[^\d]", "", regex=True).str.strip()
+            df["Phone Number"] = (
+                df["Phone Number"].astype(str).str.replace(r"[^\d]", "", regex=True).str.strip()
+            )
 
         df["Date_formatted"] = pd.to_datetime(
-            df["Date_parsed"], errors="coerce").dt.strftime("%d/%m/%Y")
+            df["Date_parsed"], errors="coerce"
+        ).dt.strftime("%d/%m/%Y")
 
         # Duplicate detection
         df["dup_phone"] = df["Phone Number"].where(df["Phone Number"].ne(""))
-        df["dup_email"] = df["Email"].where(
-            df["Email"].astype(str).str.strip().ne(""))
+        df["dup_email"] = df["Email"].where(df["Email"].astype(str).str.strip().ne(""))
         df["dup_num_course2"] = df["Number_Course 2"].where(
-            df["Number_Course 2"].astype(str).str.strip().ne(""))
+            df["Number_Course 2"].astype(str).str.strip().ne("")
+        )
 
-        df["is_dup_phone"] = df.duplicated(
-            subset=["dup_phone"], keep=False) & df["dup_phone"].notna()
-        df["is_dup_email"] = df.duplicated(
-            subset=["dup_email"], keep=False) & df["dup_email"].notna()
+        df["is_dup_phone"] = df.duplicated(subset=["dup_phone"], keep=False) & df["dup_phone"].notna()
+        df["is_dup_email"] = df.duplicated(subset=["dup_email"], keep=False) & df["dup_email"].notna()
         df["is_dup_num_course2"] = df.duplicated(
-            subset=["dup_num_course2"], keep=False) & df["dup_num_course2"].notna()
+            subset=["dup_num_course2"], keep=False
+        ) & df["dup_num_course2"].notna()
 
-        df.drop(columns=["dup_phone", "dup_email",
-                "dup_num_course2"], inplace=True)
+        df.drop(columns=["dup_phone", "dup_email", "dup_num_course2"], inplace=True)
 
         # Quick action links
         if "Phone Number" in df.columns:
@@ -269,24 +272,23 @@ def load_data_from_mongo() -> pd.DataFrame:
                 return f"https://wa.me/{n}"
             df["WhatsApp"] = df["Phone Number"].apply(_wa)
             df["Tel"] = df["Phone Number"].apply(
-                lambda x: f"tel:{x}" if str(x).strip() else "")
+                lambda x: f"tel:{x}" if str(x).strip() else ""
+            )
 
         # Reverse (newest first)
         df = df.iloc[::-1].reset_index(drop=True)
         return df
 
-    except ConnectionFailure as e:
-        st.error(f"❌ Error connecting to MongoDB: {e}")
-        return pd.DataFrame(columns=EXPECTED_COLS)
-    except OperationFailure as e:
-        st.error(f"❌ MongoDB operation failed: {e}")
+    except (ConnectionFailure, OperationFailure) as e:
+        st.error(f"❌ MongoDB connection failed: {str(e)}")
         return pd.DataFrame(columns=EXPECTED_COLS)
     except Exception as e:
-        st.error(f"❌ Unexpected error: {e}")
+        st.error(f"❌ Unexpected error while fetching MongoDB data: {str(e)}")
         return pd.DataFrame(columns=EXPECTED_COLS)
     finally:
         if client:
             client.close()
+
 
 
 # -----------------------------
