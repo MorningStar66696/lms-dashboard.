@@ -9,3 +9,5 @@ google-auth
 google-auth-oauthlib
 pymongo
 python-dateutil
+pymongo
+dnspython
