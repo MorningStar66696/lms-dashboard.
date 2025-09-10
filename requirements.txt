@@ -1,13 +1,13 @@
 streamlit
 pandas
+plotly
 openpyxl
 xlsxwriter
 streamlit-autorefresh
-plotly
 gspread
 google-auth
 google-auth-oauthlib
-pymongo
+pymongo>=4.5.0
+dnspython>=2.3.0
+certifi
 python-dateutil
-pymongo
-dnspython
