@@ -190,7 +190,7 @@ def load_data_from_mongo() -> pd.DataFrame:
     """Fetch leads directly from MongoDB and return as pandas DataFrame."""
     client = None
     try:
-        client = pymongo.MongoClient(CONNECTION_STRING)
+        client = pymongo.MongoClient(CONNECTION_STRING, tls=True, tlsCAFile=certifi.where())
         client.admin.command("ping")
         db = client[DATABASE_NAME]
         collection = db[COLLECTION_NAME]
