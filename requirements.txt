@@ -1,0 +1,11 @@
+streamlit
+pandas
+openpyxl
+xlsxwriter
+streamlit-autorefresh
+plotly
+gspread
+google-auth
+google-auth-oauthlib
+pymongo
+python-dateutil
